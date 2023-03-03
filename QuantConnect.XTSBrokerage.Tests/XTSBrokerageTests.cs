@@ -18,19 +18,79 @@ using QuantConnect.Tests;
 using QuantConnect.Interfaces;
 using QuantConnect.Securities;
 using QuantConnect.Tests.Brokerages;
+using Moq;
+using QuantConnect.Brokerages;
+using QuantConnect.Configuration;
+using QuantConnect.Lean.Engine.DataFeeds;
+using QuantConnect.Tests.Common.Securities;
+using System;
+using Deedle;
+using QuantConnect.Data;
+using QuantConnect.Brokerages.XTS;
+using Newtonsoft.Json;
+using QuantConnect.XTSBrokerage;
+using XTSAPI.MarketData;
+using System.Collections.Generic;
+using System.Threading;
 
-namespace QuantConnect.TemplateBrokerage.Tests
+namespace QuantConnect.XTSBrokerages.Tests
 {
-    [TestFixture, Ignore("Not implemented")]
-    public partial class TemplateBrokerageTests : BrokerageTests
+    [TestFixture]
+    public partial class XTSBrokerageTests : BrokerageTests
     {
-        protected override Symbol Symbol { get; }
-        protected override SecurityType SecurityType { get; }
-
+        private Symbol testSymbol;
+        protected override Symbol Symbol => Symbols.SBIN;
+        /// <summary>
+        /// Gets the security type associated with the <see cref="BrokerageTests.Symbol"/>
+        /// </summary>
+        protected override SecurityType SecurityType => SecurityType.Equity;
+        List<Symbol> _symbols = new List<Symbol>();
+        long[] instrumnts = { 26000, 26001, 26002, 26003 } ;
         protected override IBrokerage CreateBrokerage(IOrderProvider orderProvider, ISecurityProvider securityProvider)
         {
-            throw new System.NotImplementedException();
+            var data = XTSInstrumentList.Instance();
+            var testcontract = XTSInstrumentList.GetContractInfoFromInstrumentID(10666);
+            var testSymbol = XTSInstrumentList.CreateLeanSymbol(testcontract);
+            var securities = new SecurityManager(new TimeKeeper(DateTime.UtcNow, TimeZones.Kolkata))
+            {
+                { Symbol, CreateSecurity(Symbol) }
+            };
+
+            var transactions = new SecurityTransactionManager(null, securities);
+            transactions.SetOrderProcessor(new FakeOrderProcessor());
+
+            var algorithm = new Mock<IAlgorithm>();
+            algorithm.Setup(a => a.Transactions).Returns(transactions);
+            algorithm.Setup(a => a.BrokerageModel).Returns(new XTSBrokerageModel());
+            algorithm.Setup(a => a.Portfolio).Returns(new SecurityPortfolioManager(securities, transactions));
+            var interactiveSecretKey = Config.Get("xts-interactive-secretkey");
+            var interactiveapiKey = Config.Get("xts-interactive-appkey");
+            var marketApiKey = Config.Get("xts-marketdata-appkey");
+            var marketSecretKey = Config.Get("xts-marketdata-secretkey");
+            var yob = Config.Get("samco-year-of-birth");
+            var tradingSegment = Config.Get("xts-trading-segment");
+            var productType = Config.Get("xts-product-type");
+            var xts = new XtsBrokerage(tradingSegment, productType, interactiveSecretKey,
+            interactiveapiKey, marketSecretKey, marketApiKey, algorithm.Object, new AggregationManager());
+            
+            foreach (var instrument in instrumnts)
+            {
+                var contract = XTSInstrumentList.GetContractInfoFromInstrumentID(instrument);
+                var sym = XTSInstrumentList.CreateLeanSymbol(contract);
+                var mapper = new XTSSymbolMapper();
+                var BrokerageSymbol = mapper.GetBrokerageSymbol(sym);
+                var info = JsonConvert.DeserializeObject<ContractInfo>(BrokerageSymbol);
+                var security = mapper.GetBrokerageSecurityType(info.ExchangeInstrumentID);
+                var symbol = mapper.GetLeanSymbol(info.Name, security, Market.India, info.ContractExpiration, info.StrikePrice.ToString().ToDecimal(), OptionRight.Call);
+                _symbols.Add(symbol);
+            }
+            xts.Subscribe(_symbols);
+            Console.WriteLine(_symbols.Count);
+            Thread.Sleep(15000);
+            return xts;
         }
+
+
         protected override bool IsAsync()
         {
             throw new System.NotImplementedException();
