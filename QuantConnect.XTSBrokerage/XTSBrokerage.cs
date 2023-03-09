@@ -13,6 +13,8 @@
  * limitations under the License.
 */
 
+//TODO: Change utc time with exchangetime
+
 using System;
 using System.Linq;
 using QuantConnect.Configuration;
@@ -64,6 +66,7 @@ namespace QuantConnect.Brokerages.XTS
         private readonly List<long> _unSubscribeInstrumentTokens = new List<long>();
         private readonly ConcurrentDictionary<long, Symbol> _subscriptionsById = new ConcurrentDictionary<long, Symbol>();
         public ConcurrentDictionary<long, Order> CachedOrderIDs = new ConcurrentDictionary<long, Order>(); // A list of currently active orders
+        //TODO: Dictionary<lean order,xts order>
         private readonly ConcurrentDictionary<int, decimal> _fills = new ConcurrentDictionary<int, decimal>();
         private string _interactiveApiKey;
         private string _interactiveApiSecret;
@@ -123,7 +126,7 @@ namespace QuantConnect.Brokerages.XTS
         {
             var leanSymbol = Symbol.Create("SBIN", SecurityType.Equity, Market.India);
             var securityExchangeHours = _mhdb.GetExchangeHours(Market.India, leanSymbol, SecurityType.Equity);
-            var localTime = DateTime.UtcNow.ConvertFromUtc(securityExchangeHours.TimeZone);
+            var localTime = DateTime.Now.ConvertFromUtc(securityExchangeHours.TimeZone);
             return securityExchangeHours.IsOpen(localTime, extendedMarketHours);
         }
 
@@ -213,26 +216,26 @@ namespace QuantConnect.Brokerages.XTS
             {
                 Log.Trace($"Connecting to {args.ConnectionState}");
             }
-            if (args.ConnectionState == ConnectionEvents.disconnect)
+            else if (args.ConnectionState == ConnectionEvents.disconnect)
             {
                 socketConnected = false;
                 Log.Trace($"Disconnected {args.ConnectionState}");
             }
-            if (args.ConnectionState == ConnectionEvents.joined)
+            else if (args.ConnectionState == ConnectionEvents.joined)
             {
                 socketConnected = true;
                 Log.Trace($"Joined {args.Data}.... Subscribing");
                 Subscribe(GetSubscribed());
             }
-            if (args.ConnectionState == ConnectionEvents.success)
+            else if (args.ConnectionState == ConnectionEvents.success)
             {
                 Log.Trace($"success {args.Data}");
             }
-            if (args.ConnectionState == ConnectionEvents.warning)
+            else if (args.ConnectionState == ConnectionEvents.warning)
             {
                 Log.Trace($"warning {args.Data}");
             }
-            if (args.ConnectionState == ConnectionEvents.error)
+            else if (args.ConnectionState == ConnectionEvents.error)
             {
                 Log.Error($"XTSBrokerage.OnError(): Message: {args.Data}");
                 if (!IsExchangeOpen(extendedMarketHours: true))
@@ -240,7 +243,7 @@ namespace QuantConnect.Brokerages.XTS
                     //Disconnect socket
                 }
             }
-            if (args.ConnectionState == ConnectionEvents.logout)
+            else if (args.ConnectionState == ConnectionEvents.logout)
             {
                 Log.Error($"XTSBrokerage.OnError(): Message: {args.Data}");
                 if (!IsExchangeOpen(extendedMarketHours: true))
@@ -258,52 +261,60 @@ namespace QuantConnect.Brokerages.XTS
             //Whenever there is change in order status this event will be generated
             if (args.InteractiveMessageType == InteractiveMessageType.Order)
             {
-                OrderResult order = JsonConvert.DeserializeObject<OrderResult>(args.Data.ToString());
+                XTSOrderResult order = JsonConvert.DeserializeObject<XTSOrderResult>(args.Data.ToString());
                 if (order.OrderStatus.ToUpperInvariant() == "REJECTED")
                 {
                     if (CachedOrderIDs.TryGetValue(order.AppOrderID, out Order data))
                     {
-                        OnOrderEvent(new OrderEvent(data, DateTime.UtcNow, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.Invalid });
+                        CachedOrderIDs.TryRemove(order.AppOrderID, out Order info);
+                        OnOrderEvent(new OrderEvent(data, order.ExchangeTransactTime, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.Invalid });
+                        OnMessage(new BrokerageMessageEvent(
+                                      BrokerageMessageType.Warning,
+                                      -1,
+                                      $"XTSBrokerage: request failed: [{order.OrderStatus}] {order.MessageCode}, Error Message: {order.CancelRejectReason}"));
                     }
                 }
-                if (order.OrderStatus.ToUpperInvariant() == "CANCELLEd")
+                if (order.OrderStatus.ToUpperInvariant() == "CANCELLED")
                 {
                     if (CachedOrderIDs.TryGetValue(order.AppOrderID, out Order data))
                     {
-                        OnOrderEvent(new OrderEvent(data, DateTime.UtcNow, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.Canceled });
+                        OnOrderClose(order);
+                        OnOrderEvent(new OrderEvent(data, order.ExchangeTransactTime, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.Canceled });
                     }
                 }
                 if (order.OrderStatus.ToUpperInvariant() == "NEW" || order.OrderStatus.ToUpperInvariant() == "OPEN")
                 {
                     if (CachedOrderIDs.TryGetValue(order.AppOrderID, out Order data))
                     {
-                        OnOrderEvent(new OrderEvent(data, DateTime.UtcNow, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.Submitted });
+                        OnOrderEvent(new OrderEvent(data, order.ExchangeTransactTime, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.Submitted });
                     }
                 }
                 if (order.OrderStatus.ToUpperInvariant() == "PARTIALLYFILLED")
                 {
                     if (CachedOrderIDs.TryGetValue(order.AppOrderID, out Order data))
                     {
-                        //how to update the traded quantity
-                        OnOrderEvent(new OrderEvent(data, DateTime.UtcNow, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.PartiallyFilled });
+                        EmitFillOrder(order);
+                        OnOrderEvent(new OrderEvent(data, order.ExchangeTransactTime, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.PartiallyFilled });
                     }
                 }
                 if (order.OrderStatus.ToUpperInvariant() == "FILLED")
                 {
                     if (CachedOrderIDs.TryGetValue(order.AppOrderID, out Order data))
                     {
-                        OnOrderEvent(new OrderEvent(data, DateTime.UtcNow, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.Filled });
+                        CachedOrderIDs.TryRemove(order.AppOrderID,out Order info);
+                        OnOrderEvent(new OrderEvent(info, order.ExchangeTransactTime, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.Filled });
                     }
                 }
 
             }
             //When any order gets executed (filled, partially filled), a new trade event will be generated. 
-            if (args.InteractiveMessageType == InteractiveMessageType.Trade)
+            else if (args.InteractiveMessageType == InteractiveMessageType.Trade)
             {
+                
 
             }
             //If any position change happens then this will be generated
-            if (args.InteractiveMessageType == InteractiveMessageType.Position)
+            else if (args.InteractiveMessageType == InteractiveMessageType.Position)
             {
 
             }
@@ -318,7 +329,7 @@ namespace QuantConnect.Brokerages.XTS
                 var data = args.Value;
             }
 
-            if (args.MarketDataPorts == MarketDataPorts.touchlineEvent)
+            else if (args.MarketDataPorts == MarketDataPorts.touchlineEvent)
             {
                 Log.Trace($"Data: {args.SourceData}");
                 Touchline data = JsonConvert.DeserializeObject<Touchline>(args.SourceData.ToString());
@@ -348,12 +359,12 @@ namespace QuantConnect.Brokerages.XTS
                 }
 
             }
-            if (args.MarketDataPorts == MarketDataPorts.candleDataEvent)
+            else if (args.MarketDataPorts == MarketDataPorts.candleDataEvent)
             {
                 var data = args.Value;
             }
 
-            if (args.MarketDataPorts == MarketDataPorts.openInterestEvent)
+            else if (args.MarketDataPorts == MarketDataPorts.openInterestEvent)
             {
                 OI data = JsonConvert.DeserializeObject<OI>(args.SourceData.ToString());
                 try
@@ -398,10 +409,10 @@ namespace QuantConnect.Brokerages.XTS
         }
 
 
-        private void OnOrderClose(OrderResult orderDetails)  
+        private void OnOrderClose(XTSOrderResult orderDetails)  
         {
             var brokerId = orderDetails.AppOrderID;
-            if (orderDetails.OrderStatus.ToLower() == "cancelled")
+            if (orderDetails.OrderStatus.ToLower() == "canceled")
             {
                 var order = CachedOrderIDs
                     .FirstOrDefault(o => o.Value.BrokerId.Contains(brokerId.ToString()))
@@ -416,86 +427,84 @@ namespace QuantConnect.Brokerages.XTS
                     }
                 }
                 Order outOrder;
-                if (CachedOrderIDs.TryRemove(order.Id, out outOrder))
-                {
-                    OnOrderEvent(new OrderEvent(order,
-                        DateTime.UtcNow,
+                OnOrderEvent(new OrderEvent(order,
+                        orderDetails.ExchangeTransactTime,
                         OrderFee.Zero,
                         "XTS Order Event")
                     { Status = OrderStatus.Canceled });
-                }
             }
         }
 
-        private void FillMonitorAction()
-        {
-            Log.Trace("XTSBrokerage.FillMonitorAction(): task started");
+        //this is just taking the followup of each order one by one....
+        //private void FillMonitorAction()
+        //{
+        //    Log.Trace("XTSBrokerage.FillMonitorAction(): task started");
 
-            try
-            {
-                WaitTillConnected();
-                foreach (var order in GetOpenOrders())
-                {
-                    CachedOrderIDs.TryAdd(order.BrokerId.First().ToInt64(), order);
-                }
+        //    try
+        //    {
+        //        WaitTillConnected();
+        //        foreach (var order in GetOpenOrders())
+        //        {
+        //            CachedOrderIDs.TryAdd(order.BrokerId.First().ToInt64(), order);
+        //        }
 
-                while (!_ctsFillMonitor.IsCancellationRequested)
-                {
-                    try
-                    {
-                        WaitTillConnected();
-                        _fillMonitorResetEvent.WaitOne(TimeSpan.FromMilliseconds(_fillMonitorTimeout), _ctsFillMonitor.Token);
+        //        while (!_ctsFillMonitor.IsCancellationRequested)
+        //        {
+        //            try
+        //            {
+        //                WaitTillConnected();
+        //                _fillMonitorResetEvent.WaitOne(TimeSpan.FromMilliseconds(_fillMonitorTimeout), _ctsFillMonitor.Token);
 
-                        foreach (var kvp in CachedOrderIDs)
-                        {
-                            var orderId = kvp.Key;
-                            var order = kvp.Value;
+        //                foreach (var kvp in CachedOrderIDs)
+        //                {
+        //                    var orderId = kvp.Key;
+        //                    var order = kvp.Value;
 
-                            var response = interactive.GetOrderAsync(orderId);
-                            var result = response.Result;
-                            if (response.Status != null)
-                            {
-                                if (response.Status.ToLower() == "rejected")
-                                {
-                                    OnMessage(new BrokerageMessageEvent(
-                                        BrokerageMessageType.Warning,
-                                        -1,
-                                        $"XTSBrokerage.FillMonitorAction(): request failed: [{response.Status}] {result[0].MessageCode}, Content: {response.ToString()}, ErrorMessage: {result}"));
+        //                    var response = interactive.GetOrderAsync(orderId);
+        //                    var result = response.Result;
+        //                    if (response.Status != null)
+        //                    {
+        //                        if (response.Status.ToLower() == "rejected")
+        //                        {
+        //                            OnMessage(new BrokerageMessageEvent(
+        //                                BrokerageMessageType.Warning,
+        //                                -1,
+        //                                $"XTSBrokerage.FillMonitorAction(): request failed: [{response.Status}] {result[0].MessageCode}, Content: {response.ToString()}, ErrorMessage: {result}"));
 
-                                    continue;
-                                }
-                            }
+        //                            continue;
+        //                        }
+        //                    }
 
-                            //Process cancelled orders here.
-                            if (result[0].OrderStatus.ToLower() == "cancelled")
-                            {
-                                OnOrderClose(result[0]);
-                            }
+        //                    //Process cancelled orders here.
+        //                    if (result[0].OrderStatus.ToLower() == "cancelled")
+        //                    {
+        //                        OnOrderClose(result[0]);
+        //                    }
 
-                            if (result[0].OrderStatus.ToLower() == "open" || result[0].OrderStatus.ToLower() == "new")
-                            {
-                                // Process rest of the orders here.
-                                EmitFillOrder(result[0]);
-                            }
-                        }
-                    }
-                    catch (Exception exception)
-                    {
-                        OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Warning, -1, exception.Message));
-                    }
-                }
-            }
-            catch (Exception exception)
-            {
-                OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Error, -1, exception.Message));
-            }
+        //                    if (result[0].OrderStatus.ToLower() == "open" || result[0].OrderStatus.ToLower() == "new")
+        //                    {
+        //                        // Process rest of the orders here.
+        //                        EmitFillOrder(result[0]);
+        //                    }
+        //                }
+        //            }
+        //            catch (Exception exception)
+        //            {
+        //                OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Warning, -1, exception.Message));
+        //            }
+        //        }
+        //    }
+        //    catch (Exception exception)
+        //    {
+        //        OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Error, -1, exception.Message));
+        //    }
 
-            Log.Trace("XTSBrokerage.FillMonitorAction(): task ended");
-        }
+        //    Log.Trace("XTSBrokerage.FillMonitorAction(): task ended");
+        //}
 
 
         //can be call in partiallyfilled case 
-        private void EmitFillOrder(OrderResult orderResponse)
+        private void EmitFillOrder(XTSOrderResult orderResponse)
         {
             try
             {
@@ -517,7 +526,7 @@ namespace QuantConnect.Brokerages.XTS
                 var symbol = _XTSMapper.GetLeanSymbol(contract.Name, brokerageSecurityType, Market.India);
                 var fillPrice = decimal.Parse(orderResponse.OrderPrice.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture);
                 var fillQuantity = orderResponse.OrderQuantity - orderResponse.LeavesQuantity;
-                var updTime = DateTime.UtcNow;
+                var updTime = orderResponse.ExchangeTransactTime;
                 var security = _securityProvider.GetSecurity(order.Symbol);
                 var orderFee = security.FeeModel.GetOrderFee(new OrderFeeParameters(security, order));
                 var status = OrderStatus.Filled;
@@ -552,10 +561,9 @@ namespace QuantConnect.Brokerages.XTS
                 if (status == OrderStatus.Filled)
                 {
                     Order outOrder;
-                    CachedOrderIDs.TryRemove(order.Id, out outOrder);
+                    CachedOrderIDs.TryRemove(orderResponse.AppOrderID, out outOrder);
                     decimal ignored;
                     _fills.TryRemove(order.Id, out ignored);
-                    CachedOrderIDs.TryRemove(brokerId, out outOrder);
                 }
 
                 OnOrderEvent(orderEvent);
@@ -568,7 +576,7 @@ namespace QuantConnect.Brokerages.XTS
 
 
 
-        private OrderStatus ConvertOrderStatus(OrderResult orderDetails)
+        private OrderStatus ConvertOrderStatus(XTSOrderResult orderDetails)
         {
             //TODO: order state diagram
             var filledQty = Convert.ToInt32(orderDetails.OrderQuantity, CultureInfo.InvariantCulture);
@@ -624,7 +632,7 @@ namespace QuantConnect.Brokerages.XTS
             Task<OrderIdResult> responseTask = interactive.PlaceOrderAsync(
                 exchange, data.ExchangeInstrumentID, orderDirection, orderType,
                 order.Quantity.ToString().ToInt32(), orderPrice, 0.0, xtsProductType,
-                order.TimeInForce.ToString(), 0, order.ContingentId.ToString()
+                order.TimeInForce.ToString(), 0, order.Id.ToString()
                 );
 
             responseTask.Wait();
@@ -678,8 +686,8 @@ namespace QuantConnect.Brokerages.XTS
             subscriptionManager.UnsubscribeImpl += (s, t) => Unsubscribe(s);
 
             _subscriptionManager = subscriptionManager;
-            _fillMonitorTask = Task.Factory.StartNew(FillMonitorAction, _ctsFillMonitor.Token);
-
+            //_fillMonitorTask = Task.Factory.StartNew(FillMonitorAction, _ctsFillMonitor.Token);
+            Connect();
             //ValidateSubscription();
             Log.Trace("XTSBrokerage(): Start XTS Brokerage");
         }
@@ -702,9 +710,9 @@ namespace QuantConnect.Brokerages.XTS
                     Log.Trace("XTSBrokerage.Connect(): Connecting...");
                     Task<InteractiveLoginResult> login1 = interactive.LoginAsync<InteractiveLoginResult>(_interactiveApiKey, _interactiveApiSecret, "WebAPI");
                     login1.Wait();
-                    userID = login1.Result.userID;
-                    if (login1.IsCompleted && login1 != null)
+                    if (login1.IsCompleted && login1.Result != null)
                     {
+                        userID = login1.Result.userID;
                         if (interactive.ConnectToSocket())
                         {
                             socketConnected = true;
@@ -719,6 +727,10 @@ namespace QuantConnect.Brokerages.XTS
                             throw new ArgumentException("Server not connected: Check UserId or Token or server url ");
                         }
                     }
+                    else
+                    {
+                        throw new ArgumentException("Login not completed");
+                    }
                 }
 
                 //To connect with MarketData Broadcast
@@ -728,7 +740,7 @@ namespace QuantConnect.Brokerages.XTS
                     MarketDataLoginResult mlogin;
                     Task<MarketDataLoginResult> mlogin1 = marketdata.LoginAsync<MarketDataLoginResult>(_marketApiKey, _marketApiSecret, "WebAPI");
                     mlogin1.Wait();
-                    if (mlogin1.IsCompleted && mlogin1 != null)
+                    if (mlogin1.IsCompleted && mlogin1.Result != null)
                     {
                         MarketDataPorts[] marketports = {
                                                     MarketDataPorts.marketDepthEvent,MarketDataPorts.candleDataEvent,MarketDataPorts.exchangeTradingStatusEvent,
@@ -743,6 +755,10 @@ namespace QuantConnect.Brokerages.XTS
                                 _checkConnectionTask[1] = Task.Factory.StartNew(CheckConnection, _ctsFillMonitor.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
                             }
                         }
+                    }
+                    else
+                    {
+                        throw new ArgumentException("Login not completed");
                     }
                 }
 
@@ -1050,15 +1066,18 @@ namespace QuantConnect.Brokerages.XTS
         /// <returns>True if the request for a new order has been placed, false otherwise</returns>
         public override bool PlaceOrder(Order order)
         {
+            //Thread.Sleep(3000);
             //order placing and get the instant result
             var orderFee = OrderFee.Zero;
-            var orderProperties = order.Properties as IndiaOrderProperties;
+
+            var orderProperties = (IndiaOrderProperties)order.Properties;
             if (orderProperties == null || orderProperties.Exchange == null)
             {
-                var errorMessage = $"Order failed, Order Id: {order.Id} timestamp: {order.Time} quantity: {order.Quantity} content: Please specify a valid order properties with an exchange value";
-                OnOrderEvent(new OrderEvent(order, DateTime.UtcNow, orderFee, "XTS Order Event") { Status = OrderStatus.Invalid });
-                OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Warning, -1, errorMessage));
-                return false;
+                orderProperties.Exchange = Exchange.NSE;
+                //var errorMessage = $"Order failed, Order Id: {order.Id} timestamp: {order.Time} quantity: {order.Quantity} content: Please specify a valid order properties with an exchange value";
+                //OnOrderEvent(new OrderEvent(order, DateTime.Now, orderFee, "XTS Order Event") { Status = OrderStatus.Invalid });
+                //OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Warning, -1, errorMessage));
+                //return false;
             }
             var orderResponse = placeXTSOrder(order);
             if (orderResponse.AppOrderID != null)
@@ -1072,8 +1091,9 @@ namespace QuantConnect.Brokerages.XTS
             }
             else
             {
+                var time = DateTime.UtcNow.AddHours(5.5);
                 var message = $"Order failed, Order Id: {order.Id} timestamp: {order.Time} quantity: {order.Quantity} content: {orderResponse}";
-                OnOrderEvent(new OrderEvent(order, DateTime.UtcNow, orderFee, "XTS Order Event") { Status = OrderStatus.Invalid });
+                OnOrderEvent(new OrderEvent(order, time, orderFee, "XTS Order Event") { Status = OrderStatus.Invalid });
                 OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Warning, -1, message));
                 return false;
             }
@@ -1087,7 +1107,40 @@ namespace QuantConnect.Brokerages.XTS
         /// <returns>True if the request was made for the order to be updated, false otherwise</returns>
         public override bool UpdateOrder(Order order)
         {
-            throw new NotImplementedException();
+            var appOrderid = order.BrokerId.First().ToInt64();
+            var orderType = ConvertOrderType(order.Type);
+            var orderPrice = double.Parse(order.Price.ToString(), CultureInfo.InvariantCulture);
+            var orderProperties = order.Properties as IndiaOrderProperties;
+            var modifyOrderTask = interactive.ModifyOrderAsync(appOrderid, orderType, order.Quantity.ToString().ToInt32(),orderPrice,0.0,
+                                                               orderProperties.ProductType,order.TimeInForce.ToString(),0,order.ContingentId.ToString());
+            modifyOrderTask.Wait();
+            if (modifyOrderTask.IsCompleted && modifyOrderTask.Result != null)
+            {
+                var modifyResponse = modifyOrderTask.Result;
+                if (CachedOrderIDs.ContainsKey(modifyResponse.AppOrderID))
+                {
+                    if (!CachedOrderIDs[modifyResponse.AppOrderID].BrokerId.Contains(modifyResponse.AppOrderID.ToString()))
+                    {
+                        CachedOrderIDs[modifyResponse.AppOrderID].BrokerId.Clear();
+                        CachedOrderIDs[modifyResponse.AppOrderID].BrokerId.Add(modifyResponse.AppOrderID.ToString());
+                    }
+                }
+                else
+                {
+                    order.BrokerId.Add(modifyResponse.AppOrderID.ToString());
+                    CachedOrderIDs.TryAdd(modifyResponse.AppOrderID, order);
+                }
+                OnOrderEvent(new OrderEvent(order, DateTime.Now, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.UpdateSubmitted });
+                Log.Trace($"XTSBrokerage.UpdateOrder(): Order submitted successfully - OrderId: {order.Id}, AppOrderId: {order.BrokerId.First()}");
+                return true;
+            }
+            else
+            {
+                var errorMessage = $"Error in modify Order {modifyOrderTask.Exception} ";
+                OnOrderEvent(new OrderEvent(order, DateTime.Now, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.Invalid, Message = errorMessage });
+                OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Warning, -1, errorMessage));
+            }
+            return false;
         }
 
         /// <summary>
@@ -1097,7 +1150,24 @@ namespace QuantConnect.Brokerages.XTS
         /// <returns>True if the request was made for the order to be canceled, false otherwise</returns>
         public override bool CancelOrder(Order order)
         {
-            throw new NotImplementedException();
+            var BrokerId = order.BrokerId[0].ToInt64();
+            var canceltask = interactive.CancelOrderAsync(BrokerId);
+            canceltask.Wait();
+            if(canceltask.IsCompleted && canceltask.Result != null) {
+                //using Assert and check their ids
+                if (order.BrokerId.First() == canceltask.Result.AppOrderID.ToString())
+                {
+                    OnOrderEvent(new OrderEvent(order, DateTime.Now, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.Canceled });
+                    return true;
+                }
+            }
+            else
+            {
+                var errorMessage = $"Error in cancel Order {canceltask.Exception} ";
+                //OnOrderEvent(new OrderEvent(order, DateTime.UtcNow, OrderFee.Zero, "XTS Order Event") { Status = OrderStatus.Invalid, Message = errorMessage });
+                OnMessage(new BrokerageMessageEvent(BrokerageMessageType.Warning, -1, errorMessage));
+            }
+            return false;
         }
 
         private IEnumerable<Symbol> GetSubscribed()
@@ -1148,9 +1218,19 @@ namespace QuantConnect.Brokerages.XTS
         {
             if (IsConnected)
             {
-                // interactiveSocket.Close();
+                 //interactiveSocket.Close();
                 return;
             }
+        }
+
+        /// <summary>
+        /// Gets the history for the requested security
+        /// </summary>
+        /// <param name="request">The historical data request</param>
+        /// <returns>An enumerable of bars covering the span specified in the request</returns>
+        public override IEnumerable<BaseData> GetHistory(Data.HistoryRequest request)
+        {
+            return Enumerable.Empty<BaseData>();
         }
     }
 }

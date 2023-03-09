@@ -35,12 +35,12 @@ namespace QuantConnect.Tests.Brokerages.XTS
                 return new[]
                 {
                     // valid parameters
-                    new TestCaseData(Symbols.SBIN, Resolution.Tick, Time.OneMinute, false),
-                    new TestCaseData(Symbols.SBIN, Resolution.Second, Time.OneMinute, false),
-                    new TestCaseData(Symbols.SBIN, Resolution.Minute, Time.OneHour, false),
-                    new TestCaseData(Symbols.SBIN, Resolution.Hour, Time.OneDay, false),
-                    new TestCaseData(Symbols.SBIN, Resolution.Daily, TimeSpan.FromDays(15), false),
-                    new TestCaseData(Symbols.SBIN, Resolution.Daily, TimeSpan.FromDays(-15), false)
+                    new TestCaseData(Symbols.PNB, Resolution.Tick, Time.OneMinute, false),
+                    new TestCaseData(Symbols.PNB, Resolution.Second, Time.OneMinute, false),
+                    new TestCaseData(Symbols.PNB, Resolution.Minute, Time.OneHour, false),
+                    new TestCaseData(Symbols.PNB, Resolution.Hour, Time.OneDay, false),
+                    new TestCaseData(Symbols.PNB, Resolution.Daily, TimeSpan.FromDays(15), false),
+                    new TestCaseData(Symbols.PNB, Resolution.Daily, TimeSpan.FromDays(-15), false)
                 };
             }
         }

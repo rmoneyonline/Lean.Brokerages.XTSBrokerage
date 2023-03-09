@@ -38,19 +38,16 @@ namespace QuantConnect.XTSBrokerages.Tests
     [TestFixture]
     public partial class XTSBrokerageTests : BrokerageTests
     {
-        private Symbol testSymbol;
-        protected override Symbol Symbol => Symbols.SBIN;
+        protected override Symbol Symbol => Symbols.PNB;
+        protected XtsBrokerage xts = null;
         /// <summary>
         /// Gets the security type associated with the <see cref="BrokerageTests.Symbol"/>
         /// </summary>
         protected override SecurityType SecurityType => SecurityType.Equity;
         List<Symbol> _symbols = new List<Symbol>();
-        long[] instrumnts = { 26000, 26001, 26002, 26003 } ;
+        long[] instruments = { 26000, 26001, 26002, 26003, 10666 } ;
         protected override IBrokerage CreateBrokerage(IOrderProvider orderProvider, ISecurityProvider securityProvider)
         {
-            var data = XTSInstrumentList.Instance();
-            var testcontract = XTSInstrumentList.GetContractInfoFromInstrumentID(10666);
-            var testSymbol = XTSInstrumentList.CreateLeanSymbol(testcontract);
             var securities = new SecurityManager(new TimeKeeper(DateTime.UtcNow, TimeZones.Kolkata))
             {
                 { Symbol, CreateSecurity(Symbol) }
@@ -67,13 +64,18 @@ namespace QuantConnect.XTSBrokerages.Tests
             var interactiveapiKey = Config.Get("xts-interactive-appkey");
             var marketApiKey = Config.Get("xts-marketdata-appkey");
             var marketSecretKey = Config.Get("xts-marketdata-secretkey");
-            var yob = Config.Get("samco-year-of-birth");
             var tradingSegment = Config.Get("xts-trading-segment");
             var productType = Config.Get("xts-product-type");
-            var xts = new XtsBrokerage(tradingSegment, productType, interactiveSecretKey,
+            xts = new XtsBrokerage(tradingSegment, productType, interactiveSecretKey,
             interactiveapiKey, marketSecretKey, marketApiKey, algorithm.Object, new AggregationManager());
-            
-            foreach (var instrument in instrumnts)
+            getSubscribe();
+            return xts;
+        }
+
+
+        public void getSubscribe()
+        {
+            foreach (var instrument in instruments)
             {
                 var contract = XTSInstrumentList.GetContractInfoFromInstrumentID(instrument);
                 var sym = XTSInstrumentList.CreateLeanSymbol(contract);
@@ -87,9 +89,7 @@ namespace QuantConnect.XTSBrokerages.Tests
             xts.Subscribe(_symbols);
             Console.WriteLine(_symbols.Count);
             Thread.Sleep(15000);
-            return xts;
         }
-
 
         protected override bool IsAsync()
         {
@@ -109,11 +109,11 @@ namespace QuantConnect.XTSBrokerages.Tests
         {
             return new[]
             {
-                new TestCaseData(new MarketOrderTestParameters(Symbols.BTCUSD)).SetName("MarketOrder"),
-                new TestCaseData(new LimitOrderTestParameters(Symbols.BTCUSD, 10000m, 0.01m)).SetName("LimitOrder"),
-                new TestCaseData(new StopMarketOrderTestParameters(Symbols.BTCUSD, 10000m, 0.01m)).SetName("StopMarketOrder"),
-                new TestCaseData(new StopLimitOrderTestParameters(Symbols.BTCUSD, 10000m, 0.01m)).SetName("StopLimitOrder"),
-                new TestCaseData(new LimitIfTouchedOrderTestParameters(Symbols.BTCUSD, 10000m, 0.01m)).SetName("LimitIfTouchedOrder")
+                new TestCaseData(new MarketOrderTestParameters(Symbols.PNB)).SetName("MarketOrder"),
+                new TestCaseData(new LimitOrderTestParameters(Symbols.PNB, 51.4m, 51.2m)).SetName("LimitOrder"),
+                new TestCaseData(new StopMarketOrderTestParameters(Symbols.PNB, 51.4m, 51.2m)).SetName("StopMarketOrder"),
+                new TestCaseData(new StopLimitOrderTestParameters(Symbols.PNB, 51.4m, 51.2m)).SetName("StopLimitOrder"),
+                //new TestCaseData(new LimitIfTouchedOrderTestParameters(Symbols.PNB, 51.4m, 51.2m)).SetName("LimitIfTouchedOrder")
             };
         }
 

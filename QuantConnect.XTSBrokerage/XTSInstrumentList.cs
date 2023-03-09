@@ -7,9 +7,7 @@ using System.IO;
 using System.Linq;
 using XTSAPI.MarketData;
 using QuantConnect.Logging;
-using QuantConnect.Configuration;
 using QuantConnect.Util;
-using System.Diagnostics.Contracts;
 using XTSAPI;
 
 namespace QuantConnect.XTSBrokerage
@@ -69,6 +67,8 @@ namespace QuantConnect.XTSBrokerage
                 _instrumentIDToContractInfo?.Clear();
                 _contractMapToLeanSymbol?.Clear();
                 _XTSInstrumentIDToLeanSymbol?.Clear();
+
+//TODO: replace this with automatic downloading of Contract Files
 
                 var csvString = @"D:/Contract.csv";
                 var streamReader = new StreamReader(csvString);
